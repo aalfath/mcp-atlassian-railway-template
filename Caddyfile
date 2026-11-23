@@ -1,0 +1,40 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+	servers {
+		trusted_proxies static private_ranges 100.64.0.0/10
+	}
+}
+
+:{$PORT:8080} {
+	# Railway's health check: the server's own /healthz, no token needed.
+	handle /healthz {
+		reverse_proxy 127.0.0.1:{$MCP_INTERNAL_PORT:9000} {
+			header_up Host 127.0.0.1:{$MCP_INTERNAL_PORT:9000}
+		}
+	}
+
+	# Only clients that send the generated MCP_AUTH_TOKEN get through. The token is
+	# removed before the request reaches the server, which then uses the Atlassian
+	# credentials set on this service.
+	@authed header Authorization "Bearer {$MCP_AUTH_TOKEN}"
+	handle @authed {
+		reverse_proxy 127.0.0.1:{$MCP_INTERNAL_PORT:9000} {
+			header_up -Authorization
+			header_up -Cookie
+			# The bearer token already proves the caller; drop Origin so browser-based MCP
+			# clients are not refused by the server's local-origin check.
+			header_up -Origin
+			# The server refuses non-loopback Host headers on its loopback listener
+			# (DNS-rebinding guard), so present the loopback host upstream.
+			header_up Host 127.0.0.1:{$MCP_INTERNAL_PORT:9000}
+			flush_interval -1
+		}
+	}
+
+	handle {
+		header WWW-Authenticate "Bearer realm=\"mcp-atlassian\""
+		respond "Unauthorized: send Authorization: Bearer MCP_AUTH_TOKEN" 401
+	}
+}
